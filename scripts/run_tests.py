@@ -22,13 +22,8 @@ if not os.path.isdir(BASE_RESULTS_DIR):
 # Setup torch
 ###############
 MACOS_USE_MPS = False
-if platform.system() == "Darwin" and MACOS_USE_MPS:
-    # Test for M1 GPUs
-    device = torch.device('mps' if torch.backends.mps.is_available() and torch.backends.mps.is_built() else 'cpu')
-else:
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-print(device)
+# device is set after parsing args to allow manual override
+device = torch.device('cpu')
 
 ###############
 # Setup args
@@ -41,10 +36,24 @@ parser.add_argument('--sampling', type=int, default=2500, required=False)
 parser.add_argument('--num_test', type=int, default=1, required=False)
 # parser.add_argument('--start_test', type=int, default=0, required=False)
 parser.add_argument('--gui', type=bool, default=False, required=False)
+parser.add_argument('--device', choices=['cpu', 'cuda', 'mps'], default='cpu', required=False,
+                    help='Force device: cpu (default), cuda, or mps (Apple).')
 args = parser.parse_args()
 
 
 if __name__ == "__main__":
+    # Resolve device after args
+    if args.device == 'mps' and platform.system() == "Darwin" and MACOS_USE_MPS:
+        device = torch.device('mps' if torch.backends.mps.is_available() and torch.backends.mps.is_built() else 'cpu')
+    elif args.device == 'cuda':
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    else:
+        device = torch.device('cpu')
+
+    print("Cuda version:", torch.version.cuda)
+    print("Using device:", device)
+    print("Device name:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "N/A")
+
     puzzle_path = puzzle_name_dict[args.name]
 
     mesh_1_file = os.path.join(puzzle_path, '0.obj')
@@ -61,7 +70,7 @@ if __name__ == "__main__":
     print(q1, q2_start, q2_end)
     
     m1 = SDFMesh(mesh_1_file, device, None); m1.load(); m1.generate_sampling(args.sampling)
-    m2 = SDFMesh(mesh_2_file, device, None) ;m2.load(); m2.generate_sampling(args.sampling)
+    m2 = SDFMesh(mesh_2_file, device, None); m2.load(); m2.generate_sampling(args.sampling)
     print(args.sampling)
 
     bv = None

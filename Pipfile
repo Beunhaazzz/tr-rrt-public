@@ -16,7 +16,7 @@ spatialmath-python = "*"
 open3d = "<=0.16.1"
 pybullet = "*"
 opencv-python = "*"
-mrrt = {editable = true, path = "."}
+mrrt = {file = ".", editable = true}
 
 [dev-packages]
 ipykernel = "*"

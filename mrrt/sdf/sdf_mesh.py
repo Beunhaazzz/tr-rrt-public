@@ -1,3 +1,4 @@
+import os
 import tqdm
 import numpy as np
 from spatialmath import SE3
@@ -38,7 +39,8 @@ class SDFMesh(object):
 
         train_losses = []
         for epoch in range(num_epochs):
-            self.vis.text('Epoch: {}/{} ({:.2f}%)'.format(epoch + 1, num_epochs, (epoch + 1) / num_epochs * 100.0), opts={'title': "Current epoch"}, win='curr_epoch')
+            if self.vis is not None:
+                self.vis.text('Epoch: {}/{} ({:.2f}%)'.format(epoch + 1, num_epochs, (epoch + 1) / num_epochs * 100.0), opts={'title': "Current epoch"}, win='curr_epoch')
             train(self.train_loader, self.model, self.device,
                 self.criterion, self.optimizer, epoch, train_losses, self.vis)
             if epoch % 10 == 0 or True:
@@ -48,7 +50,17 @@ class SDFMesh(object):
 
     def load(self):
         self._update_model_scale()
-        self.model.load_state_dict(torch.load(self.mesh_path + '.pth', map_location=torch.device('cpu')))
+        pth_path = self.mesh_path + '.pth'
+        if not os.path.isfile(pth_path):
+            puzzle = os.path.basename(os.path.dirname(self.mesh_path))
+            part = os.path.basename(self.mesh_path)
+            raise FileNotFoundError(
+                f"Missing SDF weights: '{pth_path}'.\n"
+                f"Generate them first, e.g.:\n"
+                f"  py .\\scripts\\fit.py --name {puzzle} --device cpu\n"
+                f"This will create weights for both parts (e.g., 0.obj.pth and 1.obj.pth)."
+            )
+        self.model.load_state_dict(torch.load(pth_path, map_location=torch.device('cpu')))
         self.model.to(self.device)
         self.mesh = trimesh.load(self.mesh_path)
         self.pq = trimesh.proximity.ProximityQuery(self.mesh)
