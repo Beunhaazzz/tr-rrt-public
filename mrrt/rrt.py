@@ -258,6 +258,6 @@ class RRT(object):
             if (iteration % 100 == 0) and self.tree_path is not None:
                 with open(self.tree_path, 'wb') as fp:
                     pickle.dump(root_start, fp)
-        
+        print("RRT: reached max iterations without finding a path")
         return None
 

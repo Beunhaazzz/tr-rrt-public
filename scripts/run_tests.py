@@ -68,6 +68,7 @@ if __name__ == "__main__":
     q2_end = puzzle_properties['q2_end']
 
     print(q1, q2_start, q2_end)
+    print("Loading meshes...")
     
     m1 = SDFMesh(mesh_1_file, device, None); m1.load(); m1.generate_sampling(args.sampling)
     m2 = SDFMesh(mesh_2_file, device, None); m2.load(); m2.generate_sampling(args.sampling)
@@ -111,17 +112,25 @@ if __name__ == "__main__":
         rrt.extend_eta = args.eta
         rrt.extend_threshold = args.threshold
         rrt.verbose = False
-
         rrt.tree_path = os.path.join(trees_dir, f'{i}.pkl')
         rrt.log_path = os.path.join(logs_dir, f'{i}.txt')
 
         start = time.time()
         # path = rrt.plan(q2_start, q2_end)
-        path = rrt.plan()
+        path = rrt.plan(num_iterations=100000, timeout=1e6)
         end = time.time()
 
-        with open(os.path.join(paths_dir, f'{i}.pkl'), 'wb') as fp:
-            pickle.dump(path, fp)
+        # Save path only if planner returned a valid path. If planning failed
+        # (path is None) create a failure marker file so users can see it quickly.
+        pkl_out = os.path.join(paths_dir, f'{i}.pkl')
+        if path is None:
+            print(f'Planner returned None for test {i}; not saving path pickle ({pkl_out}).')
+            fail_marker = os.path.join(results_dir, f'failed_{i}.txt')
+            with open(fail_marker, 'w') as ff:
+                ff.write('Planner returned None\n')
+        else:
+            with open(pkl_out, 'wb') as fp:
+                pickle.dump(path, fp)
         
         time_took = end - start
         num_iterations = rrt.iteration + 1

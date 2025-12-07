@@ -73,20 +73,29 @@ if __name__ == "__main__":
     paths_dir = os.path.join(results_dir, 'paths')
 
     with open(os.path.join(paths_dir, f'{args.pathid}.pkl'), 'rb') as fp:
-        path = pickle.load(fp)
+        pkl_path = os.path.join(paths_dir, f"{args.pathid}.pkl")
+        print(f'Loading path from {pkl_path}')
+        try:
+            path = pickle.load(fp)
+        except Exception as e:
+            print(f'Failed to load pickle file: {pkl_path}\n  Error: {e}')
+            path = None
 
     # Trivial smoothing of the path
-    curr = 0
-    while curr < len(path) - 2:
-        q_a = path[curr]
-        q_b = path[curr+2]
-        dist = distance_between_configurations(q_a, q_b)
-        if is_edge_valid(m1, q1, m2, q_a, q_b, int(dist * 20), -0.02, device):
-            del path[curr+1]
-        else:
-            curr += 1
-        print(f'{curr}/{len(path)}')
-    print("DONE smoothing the path")
+    if path is None:
+        print(f'No path found in {pkl_path}. Check {os.path.join(results_dir, "logs")} and run the planner to generate paths.')
+    else:
+        curr = 0
+        while curr < len(path) - 2:
+            q_a = path[curr]
+            q_b = path[curr+2]
+            dist = distance_between_configurations(q_a, q_b)
+            if is_edge_valid(m1, q1, m2, q_a, q_b, int(dist * 20), -0.02, device):
+                del path[curr+1]
+            else:
+                curr += 1
+            print(f'{curr}/{len(path)}')
+        print("DONE smoothing the path")
 
     # Draw the path lines
     # for i in range(len(path) - 1):
