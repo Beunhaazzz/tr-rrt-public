@@ -16,6 +16,7 @@ def resolve_device(requested: str):
         return torch.device('mps' if torch.backends.mps.is_available() and torch.backends.mps.is_built() else 'cpu')
     if requested == 'cuda':
         print("Cuda version:", torch.version.cuda)
+        print("Found {} CUDA device(s)".format(torch.cuda.device_count()))
         return torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print("No CUDA, using CPU")
     return torch.device('cpu')
