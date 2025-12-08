@@ -54,12 +54,20 @@ def trimesh_distance_between_objects(mesh1, q1: list, mesh2, q2: list) -> float:
     se3_q1 = xyzrpy_to_SE3(q1)
     se3_q2 = xyzrpy_to_SE3(q2)
     
-    # Transform mesh vertices
+    # Transform mesh vertices using SE3 matrix
     mesh1_transformed = mesh1.copy()
     mesh2_transformed = mesh2.copy()
     
-    mesh1_transformed.vertices = (se3_q1 @ mesh1_transformed.vertices.T).T
-    mesh2_transformed.vertices = (se3_q2 @ mesh2_transformed.vertices.T).T
+    # Get the 4x4 transformation matrix and apply it
+    T1 = se3_q1.data  # 4x4 matrix
+    T2 = se3_q2.data  # 4x4 matrix
+    
+    # Apply transformation: add homogeneous coordinate, transform, then remove it
+    vertices1_h = np.hstack([mesh1_transformed.vertices, np.ones((mesh1_transformed.vertices.shape[0], 1))])
+    vertices2_h = np.hstack([mesh2_transformed.vertices, np.ones((mesh2_transformed.vertices.shape[0], 1))])
+    
+    mesh1_transformed.vertices = (T1 @ vertices1_h.T).T[:, :3]
+    mesh2_transformed.vertices = (T2 @ vertices2_h.T).T[:, :3]
     
     try:
         min_dist = trimesh.proximity.distance.distance(mesh1_transformed, mesh2_transformed)
@@ -179,6 +187,12 @@ def plot_and_save_results(results: dict, puzzle_name: str) -> None:
     # Filter out infinite values for plotting
     valid_mask = (neural_distances != np.inf) & (trimesh_distances != np.inf)
     valid_errors = distance_errors[valid_mask]
+    
+    # Check if we have any valid data
+    if not np.any(valid_mask):
+        print("\n⚠ Warning: No valid distance comparisons. All trimesh tests failed.")
+        print("This may indicate an issue with mesh transformation or compatibility.")
+        return
     
     # Create a figure with multiple subplots (3x3 grid)
     fig = plt.figure(figsize=(18, 14))

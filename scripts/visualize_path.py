@@ -98,12 +98,12 @@ if __name__ == "__main__":
         print("DONE smoothing the path")
 
     # Draw the path lines
-    # for i in range(len(path) - 1):
-    #     bv.add_debug_line(
-    #         xyzrpy_2_SE3(path[i]),
-    #         xyzrpy_2_SE3(path[i+1]), 
-    #         color=[1,0,0]
-    #     )
+    for i in range(len(path) - 1):
+        bv.add_debug_line(
+            xyzrpy_2_SE3(path[i]),
+            xyzrpy_2_SE3(path[i+1]), 
+            color=[1,0,0]
+        )
     
     # Uncomment to skip path playback
     # while True:

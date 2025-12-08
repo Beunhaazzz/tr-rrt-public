@@ -60,7 +60,7 @@ class SDFMesh(object):
                 f"  py .\\scripts\\fit.py --name {puzzle} --device cpu\n"
                 f"This will create weights for both parts (e.g., 0.obj.pth and 1.obj.pth)."
             )
-        self.model.load_state_dict(torch.load(pth_path, map_location=torch.device('cpu')))
+        self.model.load_state_dict(torch.load(pth_path, map_location=torch.device('cpu'), weights_only=True))
         self.model.to(self.device)
         self.mesh = trimesh.load(self.mesh_path)
         self.pq = trimesh.proximity.ProximityQuery(self.mesh)
