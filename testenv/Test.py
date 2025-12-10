@@ -386,6 +386,7 @@ Performance:
 def Main() -> None:
     parser: argparse.ArgumentParser = argparse.ArgumentParser()
     parser.add_argument('--name', required=True, help='Puzzle name key, e.g., 09301')
+    parser.add_argument('--category', choices=['general', 'puzzle', 'screw'], default='general', help='Puzzle category')
     parser.add_argument('--device', choices=['cpu', 'cuda', 'mps'], default='cpu', help='Device to use for the SDF neural network usage')
     parser.add_argument('--num-tests', type=int, default=50, help='Number of collision detection tests to run')
     args: argparse.Namespace = parser.parse_args()
@@ -397,7 +398,8 @@ def Main() -> None:
     device: torch.device = ResolveDevice(args.device)
     print("Using device:", device)
     
-    puzzlePath: str = "./resources/models/joint_assembly_rotation/general/{}/".format(args.name)
+    puzzlePath: str = "./resources/models/joint_assembly_rotation/{}/{}/".format(args.category, args.name)
+    print("Puzzle path:", puzzlePath)
     meshFile0: str = os.path.join(puzzlePath, '0.obj')
     meshFile1: str = os.path.join(puzzlePath, '1.obj')
     
@@ -406,6 +408,8 @@ def Main() -> None:
     if not os.path.isfile(meshFile0) or not os.path.isfile(meshFile1):
         print("Error: Mesh files not found.")
         return
+    print("Mesh file 0:", meshFile0)
+    print("Mesh file 1:", meshFile1)
     trimesh0 = trimesh.load(meshFile0)
     trimesh1 = trimesh.load(meshFile1)
     

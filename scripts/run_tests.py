@@ -30,6 +30,7 @@ device = torch.device('cpu')
 ###############
 parser = argparse.ArgumentParser()
 parser.add_argument('--name', default="09301")
+# parser.add_argument('--category', choices=['general', 'puzzle', 'screw'], default='general', help='Puzzle category')
 parser.add_argument('--eta', type=float, default=0.002, required=False)
 parser.add_argument('--threshold', type=float, default=-0.002, required=False)
 parser.add_argument('--sampling', type=int, default=2500, required=False)
@@ -130,6 +131,7 @@ if __name__ == "__main__":
                 ff.write('Planner returned None\n')
         else:
             with open(pkl_out, 'wb') as fp:
+                print(f'Saving path pickle to: {pkl_out}')
                 pickle.dump(path, fp)
         
         time_took = end - start

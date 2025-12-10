@@ -24,6 +24,7 @@ def resolve_device(requested: str):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--name', required=True, help='Puzzle name key, e.g., 09301')
+    parser.add_argument('--category', choices=['general', 'puzzle', 'screw'], default='general', help='Puzzle category')
     parser.add_argument('--device', choices=['cpu', 'cuda', 'mps'], default='cpu', help='Training device')
     parser.add_argument('--samples', type=int, default=1000000, help='Number of SDF samples')
     parser.add_argument('--epochs0', type=int, default=100, help='Epochs for part 0')
@@ -36,7 +37,7 @@ if __name__ == "__main__":
     print("Number of samples:", args.samples)
     print("Epochs for part 0:", args.epochs0)
     print("Epochs for part 1:", args.epochs1)
-    base = "./resources/models/joint_assembly_rotation/general/{}/".format(args.name)
+    base = "./resources/models/joint_assembly_rotation/{}/{}/".format(args.category, args.name)
 
     mesh = mrrt.sdf.SDFMesh(base + "0.obj", device, vis)
     losses_object_0 = mesh.fit(num_samples=args.samples, num_epochs=args.epochs0)
