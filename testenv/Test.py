@@ -15,6 +15,9 @@ from spatialmath import SE3
 MACOS_USE_MPS = False
 TEST_RESULTS_DIR = './test_results'
 
+epochs0: int = 100
+epochs1: int = 2
+
 def ResolveDevice(requested: str) -> torch.device:
     if requested == 'mps' and platform.system() == "Darwin" and MACOS_USE_MPS:
         print("MacOS detected, attempting to use MPS backend")
@@ -341,16 +344,18 @@ Performance:
     plt.tight_layout()
     
     # Save the figure
-    output_path = os.path.join(TEST_RESULTS_DIR, f'collision_detection_comparison_{puzzle_name}.png')
+    output_path = os.path.join(TEST_RESULTS_DIR, f'collision_detection_comparison_{puzzle_name}_epochs0{epochs0}_epochs1{epochs1}.png')
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     print(f"\n✓ Saved comparison plot to: {output_path}")
     plt.close()
     
     # Save detailed results as JSON
-    json_path = os.path.join(TEST_RESULTS_DIR, f'collision_detection_results_{puzzle_name}.json')
+    json_path = os.path.join(TEST_RESULTS_DIR, f'collision_detection_results_{puzzle_name}_epochs0{epochs0}_epochs1{epochs1}.json')
     json_results = {
         'puzzle_name': puzzle_name,
         'num_tests': num_tests,
+        'used_epochs0': epochs0,
+        'used_epochs1': epochs1,
         'neural_sdf': {
             'mean_distance': float(neural_distances[valid_mask].mean()),
             'std_distance': float(neural_distances[valid_mask].std()),
@@ -389,7 +394,11 @@ def Main() -> None:
     parser.add_argument('--category', choices=['general', 'puzzle', 'screw'], default='general', help='Puzzle category')
     parser.add_argument('--device', choices=['cpu', 'cuda', 'mps'], default='cpu', help='Device to use for the SDF neural network usage')
     parser.add_argument('--num-tests', type=int, default=50, help='Number of collision detection tests to run')
+    parser.add_argument('--epochs0', type=int, default=epochs0, help='Number of epochs used to train object 0 (for reference)')
+    parser.add_argument('--epochs1', type=int, default=epochs1, help='Number of epochs used to train object 1 (for reference)')
     args: argparse.Namespace = parser.parse_args()
+    epochs0 = args.epochs0
+    epochs1 = args.epochs1
     
     if not os.path.isdir(TEST_RESULTS_DIR):
         print("Creating test results directory at", TEST_RESULTS_DIR)
@@ -420,15 +429,27 @@ def Main() -> None:
     print("Loading neural SDF models...")
     sdf_mesh0 = mrrt.sdf.SDFMesh(meshFile0, device)
     sdf_mesh0.load()
-    sdf_mesh0.generate_sampling(10000)
+    sdf_mesh0.generate_sampling(None)
     
     sdf_mesh1 = mrrt.sdf.SDFMesh(meshFile1, device)
     sdf_mesh1.load()
-    sdf_mesh1.generate_sampling(10000)
+    sdf_mesh1.generate_sampling(None)
     
     # Run collision detection tests
     print("Starting collision detection tests...")
     results = test_collision_detection(sdf_mesh0, sdf_mesh1, trimesh0, trimesh1, args.num_tests, device)
+    neural_distances: list = results['neural_distances']
+    trimesh_distances: list = results['trimesh_distances']
+    #create a simple lot of the distance comparisons
+    distancePlot = plt.figure(figsize=(8, 6))
+    plt.scatter(trimesh_distances, neural_distances, alpha=0.6)
+    plt.xlabel('Trimesh Distance (Ground Truth)')
+    plt.ylabel('Neural SDF Distance')
+    plt.title('Distance Comparison: Neural SDF vs Trimesh')
+    plt.grid(True, alpha=0.3)
+    distancePlotPath = os.path.join(TEST_RESULTS_DIR, f'distance_comparison_{args.name}.png')
+    plt.savefig(distancePlotPath, dpi=150, bbox_inches='tight')
+    plt.close(distancePlot)
     
     # Plot and save results
     plot_and_save_results(results, args.name)

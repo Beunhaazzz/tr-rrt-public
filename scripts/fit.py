@@ -1,5 +1,6 @@
 import platform
 import argparse
+import os
 
 import torch
 import visdom
@@ -21,6 +22,40 @@ def resolve_device(requested: str):
     print("No CUDA, using CPU")
     return torch.device('cpu')
 
+def remove_old_files(base_path, remove_type):
+    if remove_type in ['weights', 'all']:
+        for part_id in [0, 1]:
+            weight_path = base_path + "{}.obj.pth".format(part_id)
+            try:
+                os.remove(weight_path)
+                print(f"Removed old weights: {weight_path}")
+            except FileNotFoundError:
+                pass
+    if remove_type in ['meshes', 'all']:
+        for part_id in [0, 1]:
+            mesh_path = base_path + "{}_sdf.obj".format(part_id)
+            try:
+                os.remove(mesh_path)
+                print(f"Removed old mesh: {mesh_path}")
+            except FileNotFoundError:
+                pass
+    if remove_type in ['pickle', 'all']:
+        for part_id in [0, 1]:
+            pkl_path = base_path + "{}.obj.pkl".format(part_id)
+            try:
+                os.remove(pkl_path)
+                print(f"Removed old pickle: {pkl_path}")
+            except FileNotFoundError:
+                pass
+    if remove_type in ['plots', 'all']:
+        for part_id in [0, 1]:
+            plot_path = base_path + "loss_object_{}.png".format(part_id)
+            try:
+                os.remove(plot_path)
+                print(f"Removed old plot: {plot_path}")
+            except FileNotFoundError:
+                pass
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--name', required=True, help='Puzzle name key, e.g., 09301')
@@ -30,8 +65,11 @@ if __name__ == "__main__":
     parser.add_argument('--epochs0', type=int, default=100, help='Epochs for part 0')
     parser.add_argument('--epochs1', type=int, default=2, help='Epochs for part 1')
     parser.add_argument('--visdom', action='store_true', help='Enable Visdom visualization')
+    parser.add_argument('--remove-old', choices=['none', 'weights', 'meshes', 'pickle', 'plots', 'all'], default='none', help='Remove old files before training')
     args = parser.parse_args()
-
+    if args.remove_old != 'none':
+        base_path = "./resources/models/joint_assembly_rotation/{}/{}/".format(args.category, args.name)
+        remove_old_files(base_path, args.remove_old)
     device = resolve_device(args.device)
     vis = visdom.Visdom(env='sdf') if args.visdom else None
     print("Number of samples:", args.samples)
