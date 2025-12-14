@@ -441,13 +441,13 @@ def Main() -> None:
     neural_distances: list = results['neural_distances']
     trimesh_distances: list = results['trimesh_distances']
     #create a simple lot of the distance comparisons
-    distancePlot = plt.figure(figsize=(8, 6))
+    distancePlot = plt.figure(figsize=(8, 8))
     plt.scatter(trimesh_distances, neural_distances, alpha=0.6)
     plt.xlabel('Trimesh Distance (Ground Truth)')
     plt.ylabel('Neural SDF Distance')
     plt.title('Distance Comparison: Neural SDF vs Trimesh')
     plt.grid(True, alpha=0.3)
-    distancePlotPath = os.path.join(TEST_RESULTS_DIR, f'distance_comparison_{args.name}.png')
+    distancePlotPath = os.path.join(TEST_RESULTS_DIR, f'distance_comparison_{args.name}_epochs0{epochs0}_epochs1{epochs1}.png')
     plt.savefig(distancePlotPath, dpi=150, bbox_inches='tight')
     plt.close(distancePlot)
     
