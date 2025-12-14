@@ -47,23 +47,27 @@ def run_fit_script(puzzle_name, category, device, samples, epochs0, epochs1, rem
         cmd.extend(['--remove-old', remove_old])
     subprocess.run(cmd, check=True, cwd=PROJECT_ROOT)
 
-def run_test_script(puzzle_name, epochs0, epochs1):
+def run_test_script(puzzle_name, category, epochs0, epochs1):
     py_exec = pipenv_python()
     if py_exec:
         cmd = [
             py_exec, 'testenv/Test.py',
+            '--device', 'cuda',
             '--name', puzzle_name,
+            '--category', category,
             '--epochs0', str(epochs0),
             '--epochs1', str(epochs1),
-            '--num_tests', '100'
+            '--num-tests', '100'
         ]
     else:
         cmd = [
             'pipenv', 'run', 'python', 'testenv/Test.py',
+            '--device', 'cuda',
             '--name', puzzle_name,
+            '--category', category,
             '--epochs0', str(epochs0),
             '--epochs1', str(epochs1),
-            '--num_tests', '100'
+            '--num-tests', '100'
         ]
     subprocess.run(cmd, check=True, cwd=PROJECT_ROOT)
 
@@ -87,10 +91,10 @@ if __name__ == "__main__":
 
     while epochs0 <= args.max_epochs0: #we only check epochs0 because part 0 is the bigger number of epochs
         print(f"Training SDF meshes with epochs0={epochs0}, epochs1={epochs1}...")
-        run_fit_script(args.name, args.category, args.device, args.samples, epochs0, epochs1, args.remove_old if (epochs0 == args.start_epochs0 and epochs1 == args.start_epochs1) else 'none')
+        run_fit_script(args.name, args.category, args.device, args.samples, epochs0, epochs1, args.remove_old)
         
         print(f"Running tests with trained meshes (epochs0={epochs0}, epochs1={epochs1})...")
-        run_test_script(args.name, epochs0, epochs1)
+        run_test_script(args.name, args.category, epochs0, epochs1)
 
         epochs0 += args.epoch_step0
         epochs1 += args.epoch_step1

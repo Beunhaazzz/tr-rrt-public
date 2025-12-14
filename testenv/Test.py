@@ -344,13 +344,13 @@ Performance:
     plt.tight_layout()
     
     # Save the figure
-    output_path = os.path.join(TEST_RESULTS_DIR, f'collision_detection_comparison_{puzzle_name}_epochs0{epochs0}_epochs1{epochs1}.png')
+    output_path = os.path.join(TEST_RESULTS_DIR, f'collision_detection_comparison_{puzzle_name}_epochs0_{epochs0}_epochs1_{epochs1}.png')
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     print(f"\n✓ Saved comparison plot to: {output_path}")
     plt.close()
     
     # Save detailed results as JSON
-    json_path = os.path.join(TEST_RESULTS_DIR, f'collision_detection_results_{puzzle_name}_epochs0{epochs0}_epochs1{epochs1}.json')
+    json_path = os.path.join(TEST_RESULTS_DIR, f'collision_detection_results_{puzzle_name}_epochs0_{epochs0}_epochs1_{epochs1}.json')
     json_results = {
         'puzzle_name': puzzle_name,
         'num_tests': num_tests,
@@ -415,11 +415,11 @@ def Main() -> None:
     
     # Load trimesh versions (for ground truth)
     print("Loading trimesh models...")
+    print("Mesh file 0:", meshFile0)
+    print("Mesh file 1:", meshFile1)
     if not os.path.isfile(meshFile0) or not os.path.isfile(meshFile1):
         print("Error: Mesh files not found.")
         return
-    print("Mesh file 0:", meshFile0)
-    print("Mesh file 1:", meshFile1)
     trimesh0 = trimesh.load(meshFile0)
     trimesh1 = trimesh.load(meshFile1)
     
@@ -448,7 +448,7 @@ def Main() -> None:
     plt.ylabel('Neural SDF Distance')
     plt.title('Distance Comparison: Neural SDF vs Trimesh')
     plt.grid(True, alpha=0.3)
-    distancePlotPath = os.path.join(TEST_RESULTS_DIR, f'distance_comparison_{args.name}_epochs0{epochs0}_epochs1{epochs1}.png')
+    distancePlotPath = os.path.join(TEST_RESULTS_DIR, f'distance_comparison_{args.name}_epochs0_{epochs0}_epochs1_{epochs1}.png')
     plt.savefig(distancePlotPath, dpi=150, bbox_inches='tight')
     plt.close(distancePlot)
     
