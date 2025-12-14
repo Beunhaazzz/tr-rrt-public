@@ -55,7 +55,7 @@ def run_test_script(puzzle_name, epochs0, epochs1):
             '--name', puzzle_name,
             '--epochs0', str(epochs0),
             '--epochs1', str(epochs1),
-            '--num_test', '100'
+            '--num_tests', '100'
         ]
     else:
         cmd = [
@@ -63,7 +63,7 @@ def run_test_script(puzzle_name, epochs0, epochs1):
             '--name', puzzle_name,
             '--epochs0', str(epochs0),
             '--epochs1', str(epochs1),
-            '--num_test', '100'
+            '--num_tests', '100'
         ]
     subprocess.run(cmd, check=True, cwd=PROJECT_ROOT)
 
@@ -73,7 +73,7 @@ if __name__ == "__main__":
     parser.add_argument('--category', choices=['general', 'puzzle', 'screw'], default='general', help='Puzzle category')
     parser.add_argument('--device', choices=['cpu', 'cuda', 'mps'], default='cpu', help='Training device')
     parser.add_argument('--samples', type=int, default=1000000, help='Number of SDF samples')
-    parser.add_argument('--start-epochs0', type=int, default=50, help='Starting epochs for part 0')
+    parser.add_argument('--start-epochs0', type=int, default=10, help='Starting epochs for part 0')
     parser.add_argument('--start-epochs1', type=int, default=2, help='Starting epochs for part 1')
     parser.add_argument('--epoch-step0', type=int, default=10, help='Epoch increment for part 0')
     parser.add_argument('--epoch-step1', type=int, default=2, help='Epoch increment for part 1')

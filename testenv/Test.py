@@ -394,9 +394,10 @@ def Main() -> None:
     parser.add_argument('--category', choices=['general', 'puzzle', 'screw'], default='general', help='Puzzle category')
     parser.add_argument('--device', choices=['cpu', 'cuda', 'mps'], default='cpu', help='Device to use for the SDF neural network usage')
     parser.add_argument('--num-tests', type=int, default=50, help='Number of collision detection tests to run')
-    parser.add_argument('--epochs0', type=int, default=epochs0, help='Number of epochs used to train object 0 (for reference)')
-    parser.add_argument('--epochs1', type=int, default=epochs1, help='Number of epochs used to train object 1 (for reference)')
+    parser.add_argument('--epochs0', type=int, default=100, help='Number of epochs used to train object 0 (for reference)')
+    parser.add_argument('--epochs1', type=int, default=2, help='Number of epochs used to train object 1 (for reference)')
     args: argparse.Namespace = parser.parse_args()
+    global epochs0, epochs1
     epochs0 = args.epochs0
     epochs1 = args.epochs1
     
