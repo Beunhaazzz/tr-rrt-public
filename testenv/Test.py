@@ -46,6 +46,90 @@ def generate_random_configurations(num_samples: int) -> list:
         configs.append([x, y, z, rx, ry, rz])
     return configs
 
+def generate_labeled_configurations(num_samples: int, mesh1, mesh2, threshold: float, max_tries: int = 200) -> tuple:
+    """
+    Generate configurations with known labels: collision (True) or safe (False).
+    Uses trimesh distance as ground truth to ensure label correctness.
+    Returns (configs1, configs2, labels).
+    """
+    configs1 = []
+    configs2 = []
+    labels = []
+
+    # Helper to evaluate distance for given configs
+    def eval_dist(c1, c2):
+        try:
+            return trimesh_distance_between_objects(mesh1, c1, mesh2, c2)
+        except Exception:
+            return float('inf')
+
+    # Generate half collisions, half safe
+    target_collisions = num_samples // 2
+    target_safe = num_samples - target_collisions
+
+    # Collision cases: place meshes close or overlapping
+    attempts = 0
+    while target_collisions > 0 and attempts < max_tries * num_samples:
+        attempts += 1
+        # Start near each other with small random offsets
+        base = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        offset = np.random.uniform(-threshold/2, threshold/2, size=3).tolist()
+        c1 = [offset[0], offset[1], offset[2], np.random.uniform(0, 2*np.pi), np.random.uniform(0, 2*np.pi), np.random.uniform(0, 2*np.pi)]
+        c2 = [0.0, 0.0, 0.0, np.random.uniform(0, 2*np.pi), np.random.uniform(0, 2*np.pi), np.random.uniform(0, 2*np.pi)]
+        d = eval_dist(c1, c2)
+        if d != float('inf') and d < threshold:
+            configs1.append(c1)
+            configs2.append(c2)
+            labels.append(True)
+            target_collisions -= 1
+
+    # Safe cases: separate meshes by margin
+    margin = max(threshold * 2.0, 0.02)
+    attempts = 0
+    while target_safe > 0 and attempts < max_tries * num_samples:
+        attempts += 1
+        sep = np.random.uniform(margin, margin*3)
+        axis = np.random.choice([0,1,2])
+        t = [0.0, 0.0, 0.0]
+        t[axis] = sep
+        c1 = [0.0, 0.0, 0.0, np.random.uniform(0, 2*np.pi), np.random.uniform(0, 2*np.pi), np.random.uniform(0, 2*np.pi)]
+        c2 = [t[0], t[1], t[2], np.random.uniform(0, 2*np.pi), np.random.uniform(0, 2*np.pi), np.random.uniform(0, 2*np.pi)]
+        d = eval_dist(c1, c2)
+        if d != float('inf') and d > threshold:
+            configs1.append(c1)
+            configs2.append(c2)
+            labels.append(False)
+            target_safe -= 1
+
+    # If not enough, fall back to random and filter by ground truth
+    tries = 0
+    while (target_collisions > 0 or target_safe > 0) and tries < max_tries * num_samples:
+        tries += 1
+        c1 = generate_random_configurations(1)[0]
+        c2 = generate_random_configurations(1)[0]
+        d = eval_dist(c1, c2)
+        if d == float('inf'):
+            continue
+        if d < threshold and target_collisions > 0:
+            configs1.append(c1)
+            configs2.append(c2)
+            labels.append(True)
+            target_collisions -= 1
+        elif d > threshold and target_safe > 0:
+            configs1.append(c1)
+            configs2.append(c2)
+            labels.append(False)
+            target_safe -= 1
+
+    return configs1, configs2, labels
+
+def generate_same_configurations(num_samples: int) -> list:
+    """Generate identical SE3 configurations for testing"""
+    configs = []
+    for _ in range(num_samples):
+        configs.append([0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    return configs
+
 def xyzrpy_to_SE3(config: list) -> SE3:
     """Convert [x, y, z, rx, ry, rz] to SE3"""
     return SE3.Rx(config[3]) * SE3.Ry(config[4]) * SE3.Rz(config[5]) * SE3.Tx(config[0]).Ty(config[1]).Tz(config[2])
@@ -93,7 +177,7 @@ def neural_sdf_distance(sdf_mesh1, q1: list, sdf_mesh2, q2: list, device) -> flo
         print(f"Error in neural SDF distance calculation: {e}")
         return float('inf')
 
-def test_collision_detection(sdf_mesh1, sdf_mesh2, trimesh1, trimesh2, num_tests: int, device) -> dict:
+def test_collision_detection(sdf_mesh1, sdf_mesh2, trimesh1, trimesh2, num_tests: int, device, labeled_configs: tuple | None = None) -> dict:
     """
     Test collision detection with random configurations.
     Returns comparison metrics including memory usage.
@@ -105,9 +189,22 @@ def test_collision_detection(sdf_mesh1, sdf_mesh2, trimesh1, trimesh2, num_tests
     # Get process for memory monitoring
     process = psutil.Process(os.getpid())
     
-    # Generate random test configurations
-    configs1 = generate_random_configurations(num_tests)
-    configs2 = generate_random_configurations(num_tests)
+    # Generate test configurations
+    if labeled_configs is not None:
+        configs1, configs2, labels = labeled_configs
+        # Trim to num_tests if larger
+        if len(configs1) > num_tests:
+            configs1 = configs1[:num_tests]
+            configs2 = configs2[:num_tests]
+            labels = labels[:num_tests]
+    else:
+        if use_random:
+            configs1 = generate_random_configurations(num_tests)
+            configs2 = generate_random_configurations(num_tests)
+        else:
+            configs1 = generate_same_configurations(num_tests)
+            configs2 = generate_same_configurations(num_tests)
+        labels = None
     
     neural_distances = []
     trimesh_distances = []
@@ -116,6 +213,7 @@ def test_collision_detection(sdf_mesh1, sdf_mesh2, trimesh1, trimesh2, num_tests
     neural_memory = []
     trimesh_memory = []
     distance_errors = []
+    classification_labels = []
     
     for i, (config1, config2) in enumerate(zip(configs1, configs2)):
         if (i + 1) % max(1, num_tests // 10) == 0:
@@ -159,6 +257,9 @@ def test_collision_detection(sdf_mesh1, sdf_mesh2, trimesh1, trimesh2, num_tests
             distance_errors.append(error)
         else:
             distance_errors.append(float('inf'))
+
+        if labels is not None:
+            classification_labels.append(labels[i])
     
     results = {
         'neural_distances': neural_distances,
@@ -169,6 +270,7 @@ def test_collision_detection(sdf_mesh1, sdf_mesh2, trimesh1, trimesh2, num_tests
         'trimesh_memory': trimesh_memory,
         'distance_errors': distance_errors,
         'num_tests': num_tests,
+        'labels': classification_labels if labels is not None else None,
     }
     
     return results
@@ -388,6 +490,169 @@ Performance:
         json.dump(json_results, f, indent=2)
     print(f"✓ Saved detailed results to: {json_path}")
 
+def plot_collision_detection(neural_distances, trimesh_distances, threshold, puzzle_name):
+    """
+    Create collision detection visualization showing which tests detected collisions.
+    Compares neural SDF against trimesh ground truth with a threshold.
+    """
+    neural_distances_np = np.array(neural_distances)
+    trimesh_distances_np = np.array(trimesh_distances)
+    
+    # Determine collisions (distance < threshold)
+    neural_collisions = neural_distances_np < threshold
+    trimesh_collisions = trimesh_distances_np < threshold
+    
+    # Create figure with subplots
+    fig = plt.figure(figsize=(16, 10))
+    
+    # 1. Timeline plot showing collision detections
+    ax1 = plt.subplot(2, 2, 1)
+    test_indices = np.arange(len(neural_distances))
+    
+    ax1.scatter(test_indices[neural_collisions], neural_distances_np[neural_collisions], 
+                color='red', s=100, marker='x', label='Neural SDF Collision', alpha=0.7, linewidths=2)
+    ax1.scatter(test_indices[~neural_collisions], neural_distances_np[~neural_collisions], 
+                color='blue', s=50, marker='o', label='Neural SDF Safe', alpha=0.5)
+    ax1.scatter(test_indices[trimesh_collisions], trimesh_distances_np[trimesh_collisions], 
+                color='darkred', s=80, marker='+', label='Trimesh Collision', alpha=0.7, linewidths=2)
+    
+    ax1.axhline(y=threshold, color='red', linestyle='--', linewidth=2, label=f'Threshold={threshold:.3f}')
+    ax1.set_xlabel('Test Number', fontsize=11)
+    ax1.set_ylabel('Distance', fontsize=11)
+    ax1.set_title('Collision Detection Timeline', fontsize=12, fontweight='bold')
+    ax1.legend(fontsize=9)
+    ax1.grid(True, alpha=0.3)
+    
+    # 2. Confusion matrix: Neural vs Trimesh (Ground Truth)
+    ax2 = plt.subplot(2, 2, 2)
+    true_positive = np.sum(neural_collisions & trimesh_collisions)  # Both detect collision
+    false_positive = np.sum(neural_collisions & ~trimesh_collisions)  # Neural detects, trimesh doesn't
+    false_negative = np.sum(~neural_collisions & trimesh_collisions)  # Neural misses, trimesh detects
+    true_negative = np.sum(~neural_collisions & ~trimesh_collisions)  # Both detect safe
+    
+    confusion = np.array([[true_negative, false_positive],
+                          [false_negative, true_positive]])
+    
+    im = ax2.imshow(confusion, cmap='Blues', aspect='auto')
+    ax2.set_xticks([0, 1])
+    ax2.set_yticks([0, 1])
+    ax2.set_xticklabels(['Safe', 'Collision'], fontsize=10)
+    ax2.set_yticklabels(['Safe', 'Collision'], fontsize=10)
+    ax2.set_xlabel('Neural SDF Prediction', fontsize=11)
+    ax2.set_ylabel('Trimesh Ground Truth', fontsize=11)
+    ax2.set_title('Confusion Matrix: Neural vs Trimesh', fontsize=12, fontweight='bold')
+    
+    # Add text annotations
+    for i in range(2):
+        for j in range(2):
+            text = ax2.text(j, i, f'{confusion[i, j]}',
+                           ha="center", va="center", color="black", fontsize=14, fontweight='bold')
+    
+    plt.colorbar(im, ax=ax2)
+    
+    # 3. Collision count comparison
+    ax3 = plt.subplot(2, 2, 3)
+    methods = ['Neural SDF', 'Trimesh (Ground Truth)']
+    collision_counts = [
+        np.sum(neural_collisions),
+        np.sum(trimesh_collisions)
+    ]
+    safe_counts = [
+        np.sum(~neural_collisions),
+        np.sum(~trimesh_collisions)
+    ]
+    
+    x = np.arange(len(methods))
+    width = 0.35
+    
+    bars1 = ax3.bar(x - width/2, collision_counts, width, label='Collision', color='#d62728', alpha=0.7)
+    bars2 = ax3.bar(x + width/2, safe_counts, width, label='Safe', color='#2ca02c', alpha=0.7)
+    
+    ax3.set_xlabel('Method', fontsize=11)
+    ax3.set_ylabel('Count', fontsize=11)
+    ax3.set_title('Collision vs Safe Detection Counts', fontsize=12, fontweight='bold')
+    ax3.set_xticks(x)
+    ax3.set_xticklabels(methods)
+    ax3.legend()
+    ax3.grid(True, alpha=0.3, axis='y')
+    
+    # Add value labels on bars
+    for bar in bars1:
+        height = bar.get_height()
+        ax3.text(bar.get_x() + bar.get_width()/2., height,
+                f'{int(height)}', ha='center', va='bottom', fontsize=9)
+    for bar in bars2:
+        height = bar.get_height()
+        ax3.text(bar.get_x() + bar.get_width()/2., height,
+                f'{int(height)}', ha='center', va='bottom', fontsize=9)
+    
+    # 4. Statistics and metrics
+    ax4 = plt.subplot(2, 2, 4)
+    ax4.axis('off')
+    
+    # Calculate metrics
+    accuracy = (true_positive + true_negative) / len(neural_distances) if len(neural_distances) > 0 else 0
+    precision = true_positive / (true_positive + false_positive) if (true_positive + false_positive) > 0 else 0
+    recall = true_positive / (true_positive + false_negative) if (true_positive + false_negative) > 0 else 0
+    f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+    
+    stats_text = f"""
+COLLISION DETECTION ANALYSIS - {puzzle_name}
+Threshold: {threshold:.6f}
+
+Detection Counts:
+  Neural SDF:  {np.sum(neural_collisions)} collisions, {np.sum(~neural_collisions)} safe
+  Trimesh:     {np.sum(trimesh_collisions)} collisions, {np.sum(~trimesh_collisions)} safe
+
+Neural SDF Performance (vs Trimesh Ground Truth):
+  Accuracy:    {accuracy:.3f}
+  Precision:   {precision:.3f}
+  Recall:      {recall:.3f}
+  F1-Score:    {f1_score:.3f}
+
+Confusion Matrix:
+  True Positive:  {true_positive}
+  False Positive: {false_positive}
+  False Negative: {false_negative}
+  True Negative:  {true_negative}
+
+Total Tests: {len(neural_distances)}
+    """
+    
+    ax4.text(0.05, 0.5, stats_text, fontsize=10, family='monospace',
+            verticalalignment='center', bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+    
+    plt.tight_layout()
+    
+    # Save the figure
+    output_path = os.path.join(TEST_RESULTS_DIR, f'collision_detection_plot_{puzzle_name}_epochs0_{epochs0}_epochs1_{epochs1}_threshold_{threshold:.3f}.png')
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    print(f"\n✓ Saved collision detection plot to: {output_path}")
+    plt.close()
+    
+    # Print summary to console
+    print(f"\n{'='*60}")
+    print(f"COLLISION DETECTION SUMMARY (Threshold: {threshold:.6f})")
+    print(f"{'='*60}")
+    print(f"Neural SDF:  {np.sum(neural_collisions)} collisions detected")
+    print(f"Trimesh:     {np.sum(trimesh_collisions)} collisions detected (ground truth)")
+    print(f"\nNeural SDF Accuracy: {accuracy:.3f} (vs Trimesh ground truth)")
+    print(f"Precision: {precision:.3f}, Recall: {recall:.3f}, F1: {f1_score:.3f}")
+    print(f"{'='*60}\n")
+    
+    return {
+        'accuracy': accuracy,
+        'precision': precision,
+        'recall': recall,
+        'f1_score': f1_score,
+        'neural_collision_count': int(np.sum(neural_collisions)),
+        'trimesh_collision_count': int(np.sum(trimesh_collisions)),
+        'true_positive': int(true_positive),
+        'false_positive': int(false_positive),
+        'false_negative': int(false_negative),
+        'true_negative': int(true_negative)
+    }
+
 def Main() -> None:
     parser: argparse.ArgumentParser = argparse.ArgumentParser()
     parser.add_argument('--name', required=True, help='Puzzle name key, e.g., 09301')
@@ -396,10 +661,14 @@ def Main() -> None:
     parser.add_argument('--num-tests', type=int, default=50, help='Number of collision detection tests to run')
     parser.add_argument('--epochs0', type=int, default=100, help='Number of epochs used to train object 0 (for reference)')
     parser.add_argument('--epochs1', type=int, default=2, help='Number of epochs used to train object 1 (for reference)')
+    parser.add_argument('--use-random', default=True, help='Use random configurations instead of identical ones')
+    parser.add_argument('--use-labeled', action='store_true', help='Use pre-labeled collision/safe configurations (ground truth)')
+    parser.add_argument('--collision-threshold', type=float, default=0.01, help='Distance threshold for collision detection (in original mesh space)')
     args: argparse.Namespace = parser.parse_args()
-    global epochs0, epochs1
+    global epochs0, epochs1, use_random
     epochs0 = args.epochs0
     epochs1 = args.epochs1
+    use_random = args.use_random
     
     if not os.path.isdir(TEST_RESULTS_DIR):
         print("Creating test results directory at", TEST_RESULTS_DIR)
@@ -438,22 +707,68 @@ def Main() -> None:
     
     # Run collision detection tests
     print("Starting collision detection tests...")
-    results = test_collision_detection(sdf_mesh0, sdf_mesh1, trimesh0, trimesh1, args.num_tests, device)
+    labeled_tuple = None
+    if args.use_labeled:
+        # Use trimesh distance (original space) for labeling; threshold provided
+        print(f"Generating labeled configurations using threshold {args.collision_threshold:.6f}...")
+        lc1, lc2, labels = generate_labeled_configurations(args.num_tests, trimesh0, trimesh1, args.collision_threshold)
+        print(f"Generated {len(labels)} labeled configurations ({sum(labels)} collisions, {len(labels)-sum(labels)} safe)")
+        labeled_tuple = (lc1, lc2, labels)
+
+    results = test_collision_detection(sdf_mesh0, sdf_mesh1, trimesh0, trimesh1, args.num_tests, device, labeled_configs=labeled_tuple)
     neural_distances: list = results['neural_distances']
     trimesh_distances: list = results['trimesh_distances']
-    #create a simple lot of the distance comparisons
-    distancePlot = plt.figure(figsize=(8, 8))
-    plt.scatter(trimesh_distances, neural_distances, alpha=0.6)
-    plt.xlabel('Trimesh Distance (Ground Truth)')
-    plt.ylabel('Neural SDF Distance')
-    plt.title('Distance Comparison: Neural SDF vs Trimesh')
-    plt.grid(True, alpha=0.3)
-    distancePlotPath = os.path.join(TEST_RESULTS_DIR, f'distance_comparison_{args.name}_epochs0_{epochs0}_epochs1_{epochs1}.png')
-    plt.savefig(distancePlotPath, dpi=150, bbox_inches='tight')
-    plt.close(distancePlot)
+    #save a raw json of the distances
+    raw_json_path = os.path.join(TEST_RESULTS_DIR, f'raw_distances_{args.name}_epochs0_{epochs0}_epochs1_{epochs1}.json')
+    if os.path.isfile(raw_json_path):
+        base, ext = os.path.splitext(raw_json_path)
+        count = 1
+        while os.path.isfile(f"{base}_{count}{ext}"):
+            count += 1
+        raw_json_path = f"{base}_{count}{ext}"
+    with open(raw_json_path, 'w') as f:
+        json.dump({
+            'neural_distances': neural_distances,
+            'trimesh_distances': trimesh_distances
+        }, f, indent=2)
+    print(f"\n✓ Saved raw distances to: {raw_json_path}\n")
     
-    # Plot and save results
-    plot_and_save_results(results, args.name)
+    # Denormalize neural SDF distances
+    # Neural SDF is trained in normalized space (vertices scaled by 1/max_norm)
+    # We need to multiply by the average max_norm to return to original space
+    denormalization_factor = (sdf_mesh0.max_norm + sdf_mesh1.max_norm) / 2
+    neural_distances = [d * denormalization_factor if d != float('inf') else d for d in neural_distances]
+    print(f"Denormalization factor used: {denormalization_factor:.6f}")
+    print(f"(sdf_mesh0.max_norm: {sdf_mesh0.max_norm:.6f}, sdf_mesh1.max_norm: {sdf_mesh1.max_norm:.6f})\n")
+    
+    # Create collision detection visualization
+    print(f"Collision threshold: {args.collision_threshold:.6f}")
+    collision_metrics = plot_collision_detection(
+        neural_distances, trimesh_distances,
+        args.collision_threshold, args.name
+    )
+
+    # If labeled, compute classification report based on ground truth labels using neural predictions
+    if results.get('labels') is not None and len(results['labels']) == len(neural_distances):
+        gt = np.array(results['labels'])
+        pred = np.array(neural_distances) < args.collision_threshold
+        tp = int(np.sum(pred & gt))
+        fp = int(np.sum(pred & ~gt))
+        fn = int(np.sum(~pred & gt))
+        tn = int(np.sum(~pred & ~gt))
+        total = len(gt)
+        acc = (tp + tn) / total if total else 0.0
+        prec = tp / (tp + fp) if (tp + fp) else 0.0
+        rec = tp / (tp + fn) if (tp + fn) else 0.0
+        f1 = 2 * (prec * rec) / (prec + rec) if (prec + rec) else 0.0
+        print("\nLabeled ground truth evaluation (Neural vs GT labels):")
+        print(f"TP={tp}, FP={fp}, FN={fn}, TN={tn}")
+        print(f"Accuracy={acc:.3f}, Precision={prec:.3f}, Recall={rec:.3f}, F1={f1:.3f}")
+    
+    # Print sample distances for verification
+    print(f"\nSample distance comparisons:")
+    for i in range(min(5, len(neural_distances))):
+        print(f"Test {i+1}: Neural={neural_distances[i]:.6f}, Trimesh={trimesh_distances[i]:.6f}")
     
     print(f"\n{'='*60}")
     print("Testing complete!")
