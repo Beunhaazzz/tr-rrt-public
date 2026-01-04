@@ -11,6 +11,7 @@ import mrrt
 import mrrt.sdf
 from matplotlib import pyplot as plt
 from spatialmath import SE3
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 MACOS_USE_MPS = False
 TEST_RESULTS_DIR = './test_results'
@@ -163,6 +164,79 @@ def trimesh_distance_between_objects(mesh1, q1: list, mesh2, q2: list) -> float:
         # Fallback: use bounding box collision
         return float(np.linalg.norm(mesh1_transformed.centroid - mesh2_transformed.centroid))
 
+def _transform_trimesh(mesh, se3: SE3):
+    """Return a copy of `mesh` transformed by SE3.
+    Used by visualization to show meshes in the tested poses.
+    """
+    m = mesh.copy()
+    T = se3.data
+    v_h = np.hstack([m.vertices, np.ones((m.vertices.shape[0], 1))])
+    m.vertices = (T @ v_h.T).T[:, :3]
+    return m
+
+def _set_axes_equal(ax):
+    """Make 3D axes have equal scale for x/y/z.
+    """
+    x_limits = ax.get_xlim3d()
+    y_limits = ax.get_ylim3d()
+    z_limits = ax.get_zlim3d()
+
+    x_range = abs(x_limits[1] - x_limits[0])
+    y_range = abs(y_limits[1] - y_limits[0])
+    z_range = abs(z_limits[1] - z_limits[0])
+    max_range = max([x_range, y_range, z_range])
+
+    x_middle = np.mean(x_limits)
+    y_middle = np.mean(y_limits)
+    z_middle = np.mean(z_limits)
+
+    ax.set_xlim3d([x_middle - max_range/2, x_middle + max_range/2])
+    ax.set_ylim3d([y_middle - max_range/2, y_middle + max_range/2])
+    ax.set_zlim3d([z_middle - max_range/2, z_middle + max_range/2])
+
+def visualize_configuration(mesh1, q1: list, mesh2, q2: list, title: str, out_path: str,
+                            colors=((0.2, 0.4, 1.0, 0.4), (1.0, 0.3, 0.2, 0.4))):
+    """Render a single test configuration as a 3D overlay and save PNG.
+
+    - mesh1, mesh2: trimesh.Trimesh
+    - q1, q2: [x, y, z, rx, ry, rz]
+    - title: figure title
+    - out_path: file path to save PNG
+    - colors: RGBA tuples for the two meshes
+    """
+    se3_q1 = xyzrpy_to_SE3(q1)
+    se3_q2 = xyzrpy_to_SE3(q2)
+
+    m1 = _transform_trimesh(mesh1, se3_q1)
+    m2 = _transform_trimesh(mesh2, se3_q2)
+
+    fig = plt.figure(figsize=(8, 7))
+    ax = fig.add_subplot(111, projection='3d')
+
+    for m, color in ((m1, colors[0]), (m2, colors[1])):
+        try:
+            verts = m.vertices[m.faces]
+            coll = Poly3DCollection(verts, facecolors=[color], edgecolor=(0, 0, 0, 0.1), linewidths=0.2)
+            ax.add_collection3d(coll)
+        except Exception:
+            # As a fallback, scatter vertices
+            ax.scatter(m.vertices[:, 0], m.vertices[:, 1], m.vertices[:, 2], s=1, c=[color])
+
+    all_verts = np.vstack([m1.vertices, m2.vertices])
+    ax.set_xlim(all_verts[:, 0].min(), all_verts[:, 0].max())
+    ax.set_ylim(all_verts[:, 1].min(), all_verts[:, 1].max())
+    ax.set_zlim(all_verts[:, 2].min(), all_verts[:, 2].max())
+    _set_axes_equal(ax)
+
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title(title)
+    ax.view_init(elev=20, azim=35)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
 def neural_sdf_distance(sdf_mesh1, q1: list, sdf_mesh2, q2: list, device) -> float:
     """
     Calculate minimum distance using neural network SDF.
@@ -214,10 +288,14 @@ def test_collision_detection(sdf_mesh1, sdf_mesh2, trimesh1, trimesh2, num_tests
     trimesh_memory = []
     distance_errors = []
     classification_labels = []
+    used_configs1 = []
+    used_configs2 = []
     
     for i, (config1, config2) in enumerate(zip(configs1, configs2)):
         if (i + 1) % max(1, num_tests // 10) == 0:
             print(f"Progress: {i + 1}/{num_tests}")
+        used_configs1.append(config1)
+        used_configs2.append(config2)
         
         # Test neural SDF distance with memory tracking
         start_time = time.time()
@@ -270,6 +348,8 @@ def test_collision_detection(sdf_mesh1, sdf_mesh2, trimesh1, trimesh2, num_tests
         'trimesh_memory': trimesh_memory,
         'distance_errors': distance_errors,
         'num_tests': num_tests,
+        'configs1': used_configs1,
+        'configs2': used_configs2,
         'labels': classification_labels if labels is not None else None,
     }
     
@@ -515,6 +595,18 @@ def plot_collision_detection(neural_distances, trimesh_distances, threshold, puz
                 color='blue', s=50, marker='o', label='Neural SDF Safe', alpha=0.5)
     ax1.scatter(test_indices[trimesh_collisions], trimesh_distances_np[trimesh_collisions], 
                 color='darkred', s=80, marker='+', label='Trimesh Collision', alpha=0.7, linewidths=2)
+    ax1.scatter(test_indices[~trimesh_collisions], trimesh_distances_np[~trimesh_collisions], 
+                color='darkblue', s=50, marker='.', label='Trimesh Safe', alpha=0.6)
+
+    # Highlight mismatches explicitly (FP/FN) to make interpretation easier
+    mismatches_fp = np.where(neural_collisions & ~trimesh_collisions)[0]
+    mismatches_fn = np.where(~neural_collisions & trimesh_collisions)[0]
+    if mismatches_fp.size > 0:
+        ax1.scatter(mismatches_fp, neural_distances_np[mismatches_fp],
+                    color='orange', s=130, marker='D', label='Mismatch: FP', alpha=0.9, linewidths=0.5)
+    if mismatches_fn.size > 0:
+        ax1.scatter(mismatches_fn, neural_distances_np[mismatches_fn],
+                    color='purple', s=130, marker='s', label='Mismatch: FN', alpha=0.9, linewidths=0.5)
     
     ax1.axhline(y=threshold, color='red', linestyle='--', linewidth=2, label=f'Threshold={threshold:.3f}')
     ax1.set_xlabel('Test Number', fontsize=11)
@@ -541,6 +633,8 @@ def plot_collision_detection(neural_distances, trimesh_distances, threshold, puz
     ax2.set_xlabel('Neural SDF Prediction', fontsize=11)
     ax2.set_ylabel('Trimesh Ground Truth', fontsize=11)
     ax2.set_title('Confusion Matrix: Neural vs Trimesh', fontsize=12, fontweight='bold')
+    # Add counts in title for quick grasp
+    ax2.set_title(f'Confusion Matrix (TP={true_positive}, FP={false_positive}, FN={false_negative}, TN={true_negative})', fontsize=12, fontweight='bold')
     
     # Add text annotations
     for i in range(2):
@@ -629,6 +723,25 @@ Total Tests: {len(neural_distances)}
     plt.savefig(output_path, dpi=150, bbox_inches='tight')
     print(f"\n✓ Saved collision detection plot to: {output_path}")
     plt.close()
+
+    # Also export a CSV with per-test values for external validation
+    import csv
+    csv_path = os.path.join(TEST_RESULTS_DIR, f'collision_detection_tests_{puzzle_name}_epochs0_{epochs0}_epochs1_{epochs1}_threshold_{threshold:.3f}.csv')
+    with open(csv_path, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(['test_index', 'neural_distance', 'trimesh_distance', 'neural_collision', 'trimesh_collision', 'mismatch_type'])
+        for i in range(len(neural_distances)):
+            nd = neural_distances[i]
+            td = trimesh_distances[i]
+            ncol = bool(neural_collisions[i])
+            tcol = bool(trimesh_collisions[i])
+            mismatch = 'NONE'
+            if ncol and not tcol:
+                mismatch = 'FP'
+            elif (not ncol) and tcol:
+                mismatch = 'FN'
+            writer.writerow([i+1, nd, td, ncol, tcol, mismatch])
+    print(f"✓ Saved per-test CSV to: {csv_path}")
     
     # Print summary to console
     print(f"\n{'='*60}")
@@ -653,6 +766,116 @@ Total Tests: {len(neural_distances)}
         'true_negative': int(true_negative)
     }
 
+def summarize_reliability(neural_distances: list, trimesh_distances: list, threshold: float, labels: list | None = None) -> dict:
+    """Produce an overall conclusion about Neural SDF reliability vs ground truth.
+
+    - Uses regression metrics (MAE, RMSE, median error, Pearson r) on finite pairs.
+    - Uses classification metrics vs ground truth:
+        * If labels are provided and sized to data, uses them as GT.
+        * Else, uses Trimesh distances thresholding as GT.
+    - Returns a dict and prints a concise conclusion, plus suggested actions.
+    """
+    nd = np.array(neural_distances)
+    td = np.array(trimesh_distances)
+
+    finite = np.isfinite(nd) & np.isfinite(td)
+    n_total = len(nd)
+    n_valid = int(np.sum(finite))
+    n_invalid = n_total - n_valid
+
+    summary = {
+        'total_tests': n_total,
+        'valid_pairs': n_valid,
+        'invalid_pairs': n_invalid,
+    }
+
+    if n_valid > 0:
+        err = np.abs(nd[finite] - td[finite])
+        mae = float(np.mean(err))
+        rmse = float(np.sqrt(np.mean((nd[finite] - td[finite])**2)))
+        med = float(np.median(err))
+        # Pearson correlation (guard for constant vectors)
+        if np.std(nd[finite]) > 0 and np.std(td[finite]) > 0:
+            r = float(np.corrcoef(nd[finite], td[finite])[0, 1])
+        else:
+            r = float('nan')
+        summary.update({
+            'regression': {
+                'mae': mae,
+                'rmse': rmse,
+                'median_abs_error': med,
+                'pearson_r': r,
+            }
+        })
+    else:
+        summary.update({'regression': None})
+
+    # Classification comparison
+    pred = nd < threshold
+    if labels is not None and len(labels) == n_total:
+        gt = np.array(labels, dtype=bool)
+        gt_source = 'provided_labels'
+    else:
+        gt = td < threshold
+        gt_source = 'trimesh_threshold'
+
+    tp = int(np.sum(pred & gt))
+    fp = int(np.sum(pred & ~gt))
+    fn = int(np.sum(~pred & gt))
+    tn = int(np.sum(~pred & ~gt))
+    total = tp + fp + fn + tn
+    acc = (tp + tn) / total if total else 0.0
+    prec = tp / (tp + fp) if (tp + fp) else 0.0
+    rec = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = 2 * (prec * rec) / (prec + rec) if (prec + rec) else 0.0
+
+    summary.update({
+        'classification': {
+            'ground_truth_source': gt_source,
+            'tp': tp, 'fp': fp, 'fn': fn, 'tn': tn,
+            'accuracy': float(acc), 'precision': float(prec), 'recall': float(rec), 'f1': float(f1),
+        }
+    })
+
+    # Heuristic reliability rating
+    reasons = []
+    rating = 'moderate'
+    if n_valid == 0:
+        rating = 'poor'
+        reasons.append('No finite distance pairs to compare')
+    else:
+        if acc >= 0.95 and (summary['regression'] and summary['regression']['mae'] <= max(1e-6, 0.2 * threshold)):
+            rating = 'high'
+        elif acc < 0.8 or (summary['regression'] and summary['regression']['mae'] > max(5e-3, threshold)):
+            rating = 'poor'
+        # Reasons
+        if acc < 0.9:
+            reasons.append(f'Accuracy below target: {acc:.3f}')
+        if summary['regression']:
+            mae = summary['regression']['mae']
+            if mae > threshold:
+                reasons.append(f'MAE ({mae:.4f}) > threshold ({threshold:.4f})')
+            pr = summary['regression']['pearson_r']
+            if not np.isnan(pr) and pr < 0.9:
+                reasons.append(f"Low correlation r={pr:.3f}")
+        if fp + fn > 0:
+            reasons.append(f'Mismatches present: FP={fp}, FN={fn}')
+        if n_invalid > 0:
+            reasons.append(f'Invalid distance pairs: {n_invalid}')
+
+    summary['reliability'] = {'rating': rating, 'reasons': reasons}
+
+    # Print concise conclusion
+    print('\nReliability summary (Neural SDF vs ground truth):')
+    print(f"  Rating: {rating.upper()} | GT: {gt_source}")
+    if summary['regression']:
+        print(f"  MAE={summary['regression']['mae']:.6f}, RMSE={summary['regression']['rmse']:.6f}, Median={summary['regression']['median_abs_error']:.6f}, r={summary['regression']['pearson_r']}")
+    print(f"  Acc={acc:.3f}, Prec={prec:.3f}, Rec={rec:.3f}, F1={f1:.3f} | FP={fp}, FN={fn}, TN={tn}, TP={tp}")
+    if reasons:
+        print('  Notes: ' + '; '.join(reasons))
+
+    return summary
+
 def Main() -> None:
     parser: argparse.ArgumentParser = argparse.ArgumentParser()
     parser.add_argument('--name', required=True, help='Puzzle name key, e.g., 09301')
@@ -661,9 +884,13 @@ def Main() -> None:
     parser.add_argument('--num-tests', type=int, default=50, help='Number of collision detection tests to run')
     parser.add_argument('--epochs0', type=int, default=100, help='Number of epochs used to train object 0 (for reference)')
     parser.add_argument('--epochs1', type=int, default=2, help='Number of epochs used to train object 1 (for reference)')
-    parser.add_argument('--use-random', default=True, help='Use random configurations instead of identical ones')
+    # Use explicit boolean flags to avoid string parsing pitfalls
+    parser.add_argument('--use-random', dest='use_random', action='store_true', help='Use random configurations instead of identical ones')
+    parser.add_argument('--no-random', dest='use_random', action='store_false', help='Use identical configurations (baseline)')
+    parser.set_defaults(use_random=True)
     parser.add_argument('--use-labeled', action='store_true', help='Use pre-labeled collision/safe configurations (ground truth)')
     parser.add_argument('--collision-threshold', type=float, default=0.01, help='Distance threshold for collision detection (in original mesh space)')
+    parser.add_argument('--visualize-tests', type=int, default=0, help='Save 3D visuals for the first N tested configurations')
     args: argparse.Namespace = parser.parse_args()
     global epochs0, epochs1, use_random
     epochs0 = args.epochs0
@@ -699,11 +926,11 @@ def Main() -> None:
     print("Loading neural SDF models...")
     sdf_mesh0 = mrrt.sdf.SDFMesh(meshFile0, device)
     sdf_mesh0.load()
-    sdf_mesh0.generate_sampling(None)
+    sdf_mesh0.generate_sampling(2500)
     
     sdf_mesh1 = mrrt.sdf.SDFMesh(meshFile1, device)
     sdf_mesh1.load()
-    sdf_mesh1.generate_sampling(None)
+    sdf_mesh1.generate_sampling(2500)
     
     # Run collision detection tests
     print("Starting collision detection tests...")
@@ -740,6 +967,25 @@ def Main() -> None:
     neural_distances = [d * denormalization_factor if d != float('inf') else d for d in neural_distances]
     print(f"Denormalization factor used: {denormalization_factor:.6f}")
     print(f"(sdf_mesh0.max_norm: {sdf_mesh0.max_norm:.6f}, sdf_mesh1.max_norm: {sdf_mesh1.max_norm:.6f})\n")
+
+    # Optional: save 3D visuals of the first N configurations actually tested
+    if args.visualize_tests and args.visualize_tests > 0:
+        n_viz = min(args.visualize_tests, len(results.get('configs1', [])))
+        print(f"Saving 3D visuals for the first {n_viz} tested configurations...")
+        for i in range(n_viz):
+            q1 = results['configs1'][i]
+            q2 = results['configs2'][i]
+            nd = neural_distances[i] if i < len(neural_distances) else float('nan')
+            td = trimesh_distances[i] if i < len(trimesh_distances) else float('nan')
+            status_n = 'COLLISION' if (nd != float('inf') and nd < args.collision_threshold) else 'SAFE'
+            status_t = 'COLLISION' if (td != float('inf') and td < args.collision_threshold) else 'SAFE'
+            title = f"Test {i+1}: Neural={nd:.5f} ({status_n}) | Trimesh={td:.5f} ({status_t})"
+            out_path = os.path.join(TEST_RESULTS_DIR, f'config_viz_{args.name}_test_{i+1:03d}.png')
+            try:
+                visualize_configuration(trimesh0, q1, trimesh1, q2, title, out_path)
+                print(f"  ✓ Saved {out_path}")
+            except Exception as e:
+                print(f"  ⚠ Failed to save visualization for test {i+1}: {e}")
     
     # Create collision detection visualization
     print(f"Collision threshold: {args.collision_threshold:.6f}")
@@ -747,6 +993,20 @@ def Main() -> None:
         neural_distances, trimesh_distances,
         args.collision_threshold, args.name
     )
+
+    # Overall reliability conclusion (uses denormalized neural distances)
+    reliability = summarize_reliability(
+        neural_distances=neural_distances,
+        trimesh_distances=trimesh_distances,
+        threshold=args.collision_threshold,
+        labels=results.get('labels')
+    )
+
+    # Save reliability as JSON for easy reporting
+    reliability_path = os.path.join(TEST_RESULTS_DIR, f'reliability_summary_{args.name}_epochs0_{epochs0}_epochs1_{epochs1}_threshold_{args.collision_threshold:.3f}.json')
+    with open(reliability_path, 'w') as f:
+        json.dump(reliability, f, indent=2)
+    print(f"✓ Saved reliability summary to: {reliability_path}")
 
     # If labeled, compute classification report based on ground truth labels using neural predictions
     if results.get('labels') is not None and len(results['labels']) == len(neural_distances):

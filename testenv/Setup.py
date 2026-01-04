@@ -46,7 +46,7 @@ def Main() -> None:
     if not CheckPythonVersion(minimumVersion):
         print(f"Python {minimumVersion[0]}.{minimumVersion[1]} is required to run this script.")
         return
-    modulesToCheck: list[str] = ["numpy", "mesh_to_sdf", "pandas", "trimesh", "scikit-image", "pyrender", "psutil"]
+    modulesToCheck: list[str] = ["numpy", "mesh-to-sdf", "pandas", "trimesh", "scikit-image", "pyrender", "psutil", "manifold3d", "python-fcl"]
     missingModules: list[str] = CheckMissingModules(modulesToCheck)
     yesOrNo: bool = False
     if missingModules:
