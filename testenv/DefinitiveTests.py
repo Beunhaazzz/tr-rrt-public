@@ -19,6 +19,8 @@ MACOS_USE_MPS = False
 TEST_RESULTS_DIR = './test_results'
 CREATE_PLOTS = True
 
+#samplecount uit de file scripts/run_tests.py, in de args parameters is het 2500
+neuralSdfSamplecount: int = 2500
 epochs0: int = 100 
 epochs1: int = 2
 useRandomConfigurations: bool = True
@@ -66,7 +68,7 @@ def MapXYZRPYToSE3(q: list) -> SE3:
 
 def TrimeshCollisionCheck(meshA: trimesh.Trimesh, q1: list, meshB: trimesh.Trimesh, q2: list) -> bool:
     r"""
-    Perform collision checking between two meshes using trimesh with given transforms for each mesh.
+    Perform collision checking between two meshes using trimesh with given transforms.
     """
     se3Q1: SE3 = MapXYZRPYToSE3(q1)
     se3Q2: SE3 = MapXYZRPYToSE3(q2)
@@ -76,10 +78,11 @@ def TrimeshCollisionCheck(meshA: trimesh.Trimesh, q1: list, meshB: trimesh.Trime
         from trimesh.collision import CollisionManager
         cm = CollisionManager()
         cm.add_object('meshA', meshA, transform=t1)
-        return bool(cm.in_collision_single(meshB, transform=t2))
+        cm.add_object('meshB', meshB, transform=t2)
+        collision, names, data = cm.in_collision_internal(return_names=True, return_data=True)
+        return collision
     except Exception as e:
-        # Fallback: if collision module isn't available, approximate with AABB
-        print("Error during collision check with CollisionManager, falling back to AABB:", e)
+        print("Error during collision check, falling back to AABB:", e)
         return AABBCollisionCheck(meshA, q1, meshB, q2)
     
 def NeuralSDFCollisionCheck(sdfMeshA: mrrt.sdf.SDFMesh, q1: list, sdfMeshB: mrrt.sdf.SDFMesh, q2: list, device: torch.device) -> bool:
@@ -135,7 +138,17 @@ def PointCloudCollisionCheck(meshA: trimesh.Trimesh, q1: list, meshB: trimesh.Tr
     sdfValues: np.ndarray = mesh_to_sdf(meshBTransformed, points)
     # If any point has SDF <= threshold, treat as collision
     # Negative (inside) or zero exactly on surface is typically collision
+    distance: float = np.min(sdfValues)
+    print("Point Cloud minimum distance:", distance)
     return bool(np.any(sdfValues <= 0.002))  # Collision threshold uit de paper Tight Motion Planning
+
+def TrimeshClosestPointDistance(meshA: trimesh.Trimesh, meshB: trimesh.Trimesh) -> float:
+    r"""
+    Compute the minimum distance between two meshes using trimesh closest point method.
+    """
+    sampledPoints: tuple = meshA.sample(10000)
+    minDistance: float = trimesh.proximity.closest_point(meshB, sampledPoints)[1].min()
+    return minDistance
 
 def RunCollisionTest(sdfMeshA: mrrt.sdf.SDFMesh, sdfMeshB: mrrt.sdf.SDFMesh, trimeshA: trimesh.Trimesh, trimeshB: trimesh.Trimesh, numTests: int, device: torch.device) -> dict:
     r"""
@@ -145,11 +158,14 @@ def RunCollisionTest(sdfMeshA: mrrt.sdf.SDFMesh, sdfMeshB: mrrt.sdf.SDFMesh, tri
     results: dict = {
         'trimesh': {'times': [], 'memories': [], 'collisions': []},
         'neural_sdf': {'times': [], 'memories': [], 'collisions': []},
-        'aabb': {'times': [], 'memories': [], 'collisions': []}
+        'aabb': {'times': [], 'memories': [], 'collisions': []},
+        'point_cloud': {'times': [], 'memories': [], 'collisions': []}
     }
     configurations: list = GenerateRandomConfigurations(numTests) if useRandomConfigurations else [[0, 0, 0, 0, 0, 0]] * numTests
     for q in configurations:
-        # Trimesh collision check
+        print("Testing configuration:", q)
+
+        #Trimesh collision check
         startTime: float = time.time()
         memBefore: int = process.memory_info().rss
         tcol: bool = TrimeshCollisionCheck(trimeshA, q, trimeshB, q)
@@ -160,31 +176,41 @@ def RunCollisionTest(sdfMeshA: mrrt.sdf.SDFMesh, sdfMeshB: mrrt.sdf.SDFMesh, tri
         results['trimesh']['collisions'].append(tcol)
 
         # Neural SDF collision check
-        startTime = time.time()
-        memBefore = process.memory_info().rss
+        startTime: float = time.time()
+        memBefore: int = process.memory_info().rss
         nscol: bool = NeuralSDFCollisionCheck(sdfMeshA, q, sdfMeshB, q, device)
-        memAfter = process.memory_info().rss
-        endTime = time.time()
+        memAfter: int = process.memory_info().rss
+        endTime: float = time.time()
         results['neural_sdf']['times'].append(endTime - startTime)
         results['neural_sdf']['memories'].append(memAfter - memBefore)
         results['neural_sdf']['collisions'].append(nscol)
         
         # AABB collision check
-        startTime = time.time()
-        memBefore = process.memory_info().rss
+        startTime: float = time.time()
+        memBefore: int = process.memory_info().rss
         acol: bool = AABBCollisionCheck(trimeshA, q, trimeshB, q)
-        memAfter = process.memory_info().rss
-        endTime = time.time()
+        memAfter: int = process.memory_info().rss
+        endTime: float = time.time()
         results['aabb']['times'].append(endTime - startTime)
         results['aabb']['memories'].append(memAfter - memBefore)
         results['aabb']['collisions'].append(acol)
+
+        # Point Cloud collision check
+        startTime: float = time.time()
+        memBefore: int = process.memory_info().rss
+        pccol: bool = PointCloudCollisionCheck(trimeshA, q, trimeshB, q)
+        memAfter: int = process.memory_info().rss
+        endTime: float = time.time()
+        results['point_cloud']['times'].append(endTime - startTime)
+        results['point_cloud']['memories'].append(memAfter - memBefore)
+        results['point_cloud']['collisions'].append(pccol)
     return results
 
 def CreatePlotsFromResults(results: dict, puzzleName: str) -> None:
     r"""
     Create and save plots from the collision test results.
     """
-    algorithms: list = ['trimesh', 'neural_sdf', 'aabb']
+    algorithms: list = ['trimesh', 'neural_sdf', 'aabb', 'point_cloud']
     for algo in algorithms:
         times: list = results[algo]['times']
         plt.figure()
@@ -217,7 +243,6 @@ def Main() -> None:
     parser.add_argument('--num-tests', type=int, default=1, help='Number of collision detection tests to run')
     parser.add_argument('--epochs0', type=int, default=100, help='Number of epochs used to train object 0 (for reference)')
     parser.add_argument('--epochs1', type=int, default=2, help='Number of epochs used to train object 1 (for reference)')
-    # Boolean flags should not use type=bool (strings like 'False' evaluate truthy). Use paired flags.
     parser.add_argument('--random-configurations', dest='use_random_configurations', action='store_true', help='Use random configurations for testing')
     parser.add_argument('--fixed-configurations', dest='use_random_configurations', action='store_false', help='Use fixed zero configuration for testing')
     parser.set_defaults(use_random_configurations=True)
@@ -249,8 +274,8 @@ def Main() -> None:
     sdf1: mrrt.sdf.SDFMesh = mrrt.sdf.SDFMesh(meshFile1, device)
     sdf0.load()
     sdf1.load()
-    sdf0.generate_sampling(2500) #samplecount uit de file scripts/run_tests.py, in de args parameters
-    sdf1.generate_sampling(2500)
+    sdf0.generate_sampling(neuralSdfSamplecount)
+    sdf1.generate_sampling(neuralSdfSamplecount)
     print("Meshes and SDFs loaded successfully.")
 
     # Run collision tests
