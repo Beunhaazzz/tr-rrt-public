@@ -5,8 +5,8 @@ import os
 import json
 import numpy as np
 import time
+import tracemalloc
 import trimesh
-import psutil
 import mrrt
 import mrrt.sdf
 from mesh_to_sdf import mesh_to_sdf
@@ -21,9 +21,7 @@ CREATE_PLOTS = True
 
 #samplecount uit de file scripts/run_tests.py, in de args parameters is het 2500
 neuralSdfSamplecount: int = 2500
-epochs0: int = 100 
-epochs1: int = 2
-useRandomConfigurations: bool = True
+kdtreeCache: dict = {}
 
 def ResolveDevice(requested: str) -> torch.device:
     r"""
@@ -84,7 +82,7 @@ def TrimeshCollisionCheck(meshA: trimesh.Trimesh, q1: list, meshB: trimesh.Trime
     except Exception as e:
         print("Error during collision check, falling back to AABB:", e)
         return AABBCollisionCheck(meshA, q1, meshB, q2)
-    
+
 def NeuralSDFCollisionCheck(sdfMeshA: mrrt.sdf.SDFMesh, q1: list, sdfMeshB: mrrt.sdf.SDFMesh, q2: list, device: torch.device) -> bool:
     r"""
     Perform collision checking between two SDF meshes using neural SDF method with given transforms for each mesh.
@@ -138,79 +136,88 @@ def PointCloudCollisionCheck(meshA: trimesh.Trimesh, q1: list, meshB: trimesh.Tr
     sdfValues: np.ndarray = mesh_to_sdf(meshBTransformed, points)
     # If any point has SDF <= threshold, treat as collision
     # Negative (inside) or zero exactly on surface is typically collision
-    distance: float = np.min(sdfValues)
-    print("Point Cloud minimum distance:", distance)
     return bool(np.any(sdfValues <= 0.002))  # Collision threshold uit de paper Tight Motion Planning
 
-def TrimeshClosestPointDistance(meshA: trimesh.Trimesh, meshB: trimesh.Trimesh) -> float:
+def GetMeshKDTree(mesh: trimesh.Trimesh, num_points=10000):
     r"""
-    Compute the minimum distance between two meshes using trimesh closest point method.
+    Build or reuse a KDTree over surface samples of a mesh.
     """
-    sampledPoints: tuple = meshA.sample(10000)
-    minDistance: float = trimesh.proximity.closest_point(meshB, sampledPoints)[1].min()
-    return minDistance
+    key: int = id(mesh)
+    if key in kdtreeCache:
+        return kdtreeCache[key]
+    points = mesh.sample(num_points)
+    tree = cKDTree(points)
+    kdtreeCache[key] = tree
+    return tree
+
+def KDTreeCollisionCheck(meshA: trimesh.Trimesh, q1: list, meshB: trimesh.Trimesh, q2: list, threshold=0.002) -> bool:
+    r"""
+    Collision check using KDTree nearest surface distance.
+    """
+    se3Q1: SE3 = MapXYZRPYToSE3(q1)
+    se3Q2: SE3 = MapXYZRPYToSE3(q2)
+    meshAT: trimesh.Trimesh = meshA.copy()
+    meshBT: trimesh.Trimesh = meshB.copy()
+    meshAT.apply_transform(se3Q1.A)
+    meshBT.apply_transform(se3Q2.A)
+    pointsA = meshAT.sample(5000)
+    treeB = GetMeshKDTree(meshBT)
+    dists, _ = treeB.query(pointsA, k=1)
+    # If any surface is closer than threshold → collision
+    return bool(np.any(dists < threshold))
+
+def RunCollisionTestIsolated(sdfMeshA: mrrt.sdf.SDFMesh, sdfMeshB: mrrt.sdf.SDFMesh, trimeshA: trimesh.Trimesh, trimeshB: trimesh.Trimesh, q: list, device: torch.device, function: str) -> dict:
+    r"""
+    Run a single collision detection test using the specified algorithm and collect performance metrics.
+    """
+    result: dict = {'time': 0.0, 'memory': 0, 'collision': False}
+    startTime: float = time.time()
+    if function == 'trimesh':
+        col: bool = TrimeshCollisionCheck(trimeshA, q, trimeshB, q)
+    elif function == 'neural_sdf':
+        col: bool = NeuralSDFCollisionCheck(sdfMeshA, q, sdfMeshB, q, device)
+    elif function == 'aabb':
+        col: bool = AABBCollisionCheck(trimeshA, q, trimeshB, q)
+    elif function == 'point_cloud':
+        col: bool = PointCloudCollisionCheck(trimeshA, q, trimeshB, q)
+    elif function == 'kdtree':
+        col = KDTreeCollisionCheck(trimeshA, q, trimeshB, q)
+    else:
+        raise ValueError(f"Unknown collision detection function: {function}")
+    endTime: float = time.time()
+    result['time'] = endTime - startTime
+    result['collision'] = col
+    return result
 
 def RunCollisionTest(sdfMeshA: mrrt.sdf.SDFMesh, sdfMeshB: mrrt.sdf.SDFMesh, trimeshA: trimesh.Trimesh, trimeshB: trimesh.Trimesh, numTests: int, device: torch.device) -> dict:
     r"""
     Run collision detection tests using different algorithms and collect performance metrics.
     """
-    process: psutil.Process = psutil.Process(os.getpid())
     results: dict = {
         'trimesh': {'times': [], 'memories': [], 'collisions': []},
         'neural_sdf': {'times': [], 'memories': [], 'collisions': []},
         'aabb': {'times': [], 'memories': [], 'collisions': []},
-        'point_cloud': {'times': [], 'memories': [], 'collisions': []}
+        'point_cloud': {'times': [], 'memories': [], 'collisions': []},
+        'kdtree': {'times': [], 'memories': [], 'collisions': []}
     }
-    configurations: list = GenerateRandomConfigurations(numTests) if useRandomConfigurations else [[0, 0, 0, 0, 0, 0]] * numTests
+    configurations: list = GenerateRandomConfigurations(numTests)
     for q in configurations:
         print("Testing configuration:", q)
-
-        #Trimesh collision check
-        startTime: float = time.time()
-        memBefore: int = process.memory_info().rss
-        tcol: bool = TrimeshCollisionCheck(trimeshA, q, trimeshB, q)
-        memAfter: int = process.memory_info().rss
-        endTime: float = time.time()
-        results['trimesh']['times'].append(endTime - startTime)
-        results['trimesh']['memories'].append(memAfter - memBefore)
-        results['trimesh']['collisions'].append(tcol)
-
-        # Neural SDF collision check
-        startTime: float = time.time()
-        memBefore: int = process.memory_info().rss
-        nscol: bool = NeuralSDFCollisionCheck(sdfMeshA, q, sdfMeshB, q, device)
-        memAfter: int = process.memory_info().rss
-        endTime: float = time.time()
-        results['neural_sdf']['times'].append(endTime - startTime)
-        results['neural_sdf']['memories'].append(memAfter - memBefore)
-        results['neural_sdf']['collisions'].append(nscol)
-        
-        # AABB collision check
-        startTime: float = time.time()
-        memBefore: int = process.memory_info().rss
-        acol: bool = AABBCollisionCheck(trimeshA, q, trimeshB, q)
-        memAfter: int = process.memory_info().rss
-        endTime: float = time.time()
-        results['aabb']['times'].append(endTime - startTime)
-        results['aabb']['memories'].append(memAfter - memBefore)
-        results['aabb']['collisions'].append(acol)
-
-        # Point Cloud collision check
-        startTime: float = time.time()
-        memBefore: int = process.memory_info().rss
-        pccol: bool = PointCloudCollisionCheck(trimeshA, q, trimeshB, q)
-        memAfter: int = process.memory_info().rss
-        endTime: float = time.time()
-        results['point_cloud']['times'].append(endTime - startTime)
-        results['point_cloud']['memories'].append(memAfter - memBefore)
-        results['point_cloud']['collisions'].append(pccol)
+        for algo in results.keys():
+            tracemalloc.start()
+            testResult: dict = RunCollisionTestIsolated(sdfMeshA, sdfMeshB, trimeshA, trimeshB, q, device, algo)
+            current, peak = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+            results[algo]['times'].append(testResult['time'])
+            results[algo]['memories'].append(peak)
+            results[algo]['collisions'].append(testResult['collision'])
     return results
 
 def CreatePlotsFromResults(results: dict, puzzleName: str) -> None:
     r"""
     Create and save plots from the collision test results.
     """
-    algorithms: list = ['trimesh', 'neural_sdf', 'aabb', 'point_cloud']
+    algorithms: list = ['trimesh', 'neural_sdf', 'aabb', 'point_cloud', 'kdtree']
     for algo in algorithms:
         times: list = results[algo]['times']
         plt.figure()
@@ -232,6 +239,16 @@ def CreatePlotsFromResults(results: dict, puzzleName: str) -> None:
         plt.savefig(os.path.join(TEST_RESULTS_DIR, f'{puzzleName}_{algo}_memory.png'))
         plt.close()
 
+        collisions: list = results[algo]['collisions']
+        plt.figure()
+        plt.plot(collisions, marker='o', color='green')
+        plt.title(f'Collision Check Results - {algo} - Puzzle {puzzleName}')
+        plt.xlabel('Test Index')
+        plt.ylabel('Collision (1=True, 0=False)')
+        plt.grid()
+        plt.savefig(os.path.join(TEST_RESULTS_DIR, f'{puzzleName}_{algo}_collisions.png'))
+        plt.close()
+
 def Main() -> None:
     r"""
     Main function to execute the collision benchmark tests.
@@ -241,17 +258,7 @@ def Main() -> None:
     parser.add_argument('--category', choices=['general', 'puzzle', 'screw'], default='general', help='Puzzle category')
     parser.add_argument('--device', type=str, default='cuda', help="Device to use: 'cpu', 'cuda', or 'mps'")
     parser.add_argument('--num-tests', type=int, default=1, help='Number of collision detection tests to run')
-    parser.add_argument('--epochs0', type=int, default=100, help='Number of epochs used to train object 0 (for reference)')
-    parser.add_argument('--epochs1', type=int, default=2, help='Number of epochs used to train object 1 (for reference)')
-    parser.add_argument('--random-configurations', dest='use_random_configurations', action='store_true', help='Use random configurations for testing')
-    parser.add_argument('--fixed-configurations', dest='use_random_configurations', action='store_false', help='Use fixed zero configuration for testing')
-    parser.set_defaults(use_random_configurations=True)
     args: argparse.Namespace = parser.parse_args()
-
-    global epochs0, epochs1, useRandomConfigurations
-    epochs0 = args.epochs0
-    epochs1 = args.epochs1
-    useRandomConfigurations = args.use_random_configurations
 
     device: torch.device = ResolveDevice(args.device)
 
@@ -278,6 +285,10 @@ def Main() -> None:
     sdf1.generate_sampling(neuralSdfSamplecount)
     print("Meshes and SDFs loaded successfully.")
 
+    # Dit moet de grote piek voorkomen bij het meten van geheugen gebruik
+    tracemalloc.start()
+    tracemalloc.stop()
+
     # Run collision tests
     results: dict = RunCollisionTest(sdf0, sdf1, trimesh0, trimesh1, args.num_tests, device)
 
@@ -288,8 +299,8 @@ def Main() -> None:
     print("Test results saved to", resultFile)
 
     # Create plots
-    if CREATE_PLOTS:
-        CreatePlotsFromResults(results, args.name)
+    # if CREATE_PLOTS:
+    #     CreatePlotsFromResults(results, args.name)
 
 if __name__ == "__main__":
     Main()
